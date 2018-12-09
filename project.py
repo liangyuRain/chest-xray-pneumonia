@@ -10,6 +10,7 @@ Original file is located at
 import torch
 import torch.nn as nn
 import numpy as np
+import scipy
 import os
 
 import torch.nn.functional as F
@@ -19,7 +20,8 @@ from torchvision import datasets, transforms
 
 import torch.utils.data
 
-import matplotlib as plt
+import matplotlib
+import matplotlib.pyplot as plt
 
 def train(model, device, train_loader, optimizer, epoch, log_interval):
     model.train()
@@ -29,7 +31,13 @@ def train(model, device, train_loader, optimizer, epoch, log_interval):
         optimizer.zero_grad()
         
         output = model(data)
-        loss = model.loss(output, label)
+
+        # for handling tuple outputs as in Inception V3 model
+        if isinstance(output, tuple):
+            loss = sum((model.loss(o, label) for o in output))
+        else:
+            loss = model.loss(output, label)
+
         losses.append(loss.item())
         loss.backward()
         
@@ -68,7 +76,12 @@ EPOCHS = 100
 BATCH_SIZE = 32
 USE_CUDA = True
 SEED = 0
-LOG_INTERVAL = 100
+LOG_INTERVAL = 20
+LAYERS_TO_TRAIN = 1
+MODEL = 'DENSE'
+#'VGG' #'ALEX' #'RES' #'DENSE' #'INCEPT'
+NUM_CLASSES = 2
+
 
 use_cuda = USE_CUDA and torch.cuda.is_available()
 torch.manual_seed(SEED)
@@ -80,20 +93,48 @@ print('num cpus:', multiprocessing.cpu_count())
 kwargs = {'num_workers': multiprocessing.cpu_count(),
           'pin_memory': True} if use_cuda else {}
 
-model = torchvision.models.resnet18(pretrained=True)
+resize_flag = True
+input_size = (224, 224)
+if MODEL == 'INCEPT':
+    model = torchvision.models.inception_v3(pretrained=True)
+    input_size = (299, 299)
+elif MODEL == 'VGG':
+    model = torchvision.models.vgg16(pretrained=True)        
+elif MODEL == 'ALEX':
+    model = torchvision.models.alexnet(pretrained=True)
+elif MODEL == 'DENSE':
+    model = torchvision.models.densenet161(pretrained=True)
+elif MODEL == 'RES':
+    model = torchvision.models.resnet18(pretrained=True)
+
+
+# set categories to NUM_CLASSES (2 by default)
+if MODEL == 'INCEPT' or MODEL == 'RES': 
+    num_ftrs = model.fc.in_features
+    model.fc = nn.Linear(num_ftrs, NUM_CLASSES, bias=True)
+elif MODEL == 'ALEX' or MODEL == 'VGG':
+    num_ftrs = model.classifier[len(model.classifier)-1].in_features
+    model.classifier = nn.Sequential(
+        *(model.classifier[i] for i in range(len(model.classifier)-1)),
+        nn.Linear(num_ftrs, NUM_CLASSES, bias=True)
+    )
+elif MODEL == 'DENSE':
+    num_ftrs = model.classifier.in_features
+    model.classifier = nn.Linear(num_ftrs, NUM_CLASSES, bias=True)
+else:
+    pass
 
 # avoid training pretrained model
-for param in model.parameters():
-    param.requires_grad = False
+for layer in list(model.children())[:-LAYERS_TO_TRAIN]:
+    for param in layer.parameters():
+        param.requires_grad = False
 
-# set categories to 2
-num_ftrs = model.fc.in_features
-model.fc = nn.Linear(num_ftrs, 2)
+print(model)
 
 model = model.to(device)
 
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.fc.parameters(), 
+optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), 
                       lr=LR, 
                       momentum=MOMENTUM, 
                       weight_decay=WEIGHT_DECAY)
@@ -101,39 +142,49 @@ optimizer = optim.SGD(model.fc.parameters(),
 model.loss = nn.CrossEntropyLoss()
 model.testLoss = nn.CrossEntropyLoss(reduction='sum')
 
-INPUT_SIZE = (224, 224)
-
 
 class ImageLoader(object):
 
     def __init__(self, batchSize):
         super(ImageLoader, self).__init__()
-        transform_train = transforms.Compose([
-            transforms.Resize(size=INPUT_SIZE),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-        ])
+        if (resize_flag):
+            transform_train = transforms.Compose([
+                transforms.Resize(size=input_size),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+            ])
 
-        transform_test = transforms.Compose([
-            transforms.Resize(size=INPUT_SIZE),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-        ])
+            transform_test = transforms.Compose([
+                transforms.Resize(size=input_size),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+            ])
+        else:
+            transform_train = transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+            ])
+
+            transform_test = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+            ])
 
         train_dataset = datasets.ImageFolder(root='chest_xray_dataset/train',
                                              transform=transform_train)
         self.trainloader = torch.utils.data.DataLoader(train_dataset,
                                                        batch_size=batchSize,
                                                        shuffle=True,
-                                                       num_workers=2)
+                                                       num_workers=8)
 
         test_dataset = datasets.ImageFolder(root='chest_xray_dataset/test',
                                             transform=transform_test)
         self.testloader = torch.utils.data.DataLoader(test_dataset,
                                                       batch_size=batchSize,
                                                       shuffle=False,
-                                                      num_workers=2)
+                                                      num_workers=8)
 
         self.classes = ('normal', 'pneumonia')
 
