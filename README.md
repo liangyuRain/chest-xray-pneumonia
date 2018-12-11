@@ -6,7 +6,7 @@ Inspired by the paper we found named “Identifying Medical Diagnoses and Treata
 
 ### Dataset
 
-The dataset contains around 5000 Chest X-ray images of pediatric patients from one to five years old. The images are classified into two classes: the ones with Pneumonia and the normal.  They were pre-selected for quality control and all the images are human readable (for doctors) and variable sizes.
+The dataset contains around 5000 Chest X-ray images of pediatric patients from one to five years old. The images are classified into two classes: the ones with Pneumonia and the normal. They were pre-selected for quality control and all the images are human readable (for doctors) and variable sizes.
 
 ## Steps
 
@@ -26,7 +26,7 @@ model.classifier = nn.Sequential(
 )
 ```
 
-We carefully choose the layers to do the linear classification with extra dropout layers to reduce potential overfitting. We freezed the convolution layers of these networks in training that they will stay on their pretrian values and only trained the classifier layers. With learning rate 1e-5 and 30 epochs, we got the following results:
+We carefully choose the layers to do the linear classification with extra dropout layers to reduce potential overfitting. We freezed the convolution layers of these networks in training that they will stay on their pretrained values and only trained the classifier layers. With learning rate 1e-5 and 30 epochs, we got the following results:
 
 AlexNet:
 
@@ -45,19 +45,20 @@ ResNet:
 ![ResNet](https://github.com/liangyuRain/chest-xray-pneumonia/blob/master/images/RES_30_1e-05_result.png)
 
 As we can see from the results, all networks have similar performance in terms of test accuracy. 
+
 However, the test loss of Inception v3 is very stable compare to the other models and keeps on decrease continuously as we ran through the Epochs. The increment of test loss of all the other models is a clear sign that these networks were overfitting. This made Inception v3 standout as we saw its best potential in avoiding overfitting. After these results, we decide to continue our optimization of CNN with Inception V3 network.
 
 ### First Attempt to Unfreeze Convolution Layers
 
-After choosing the network to continue with, we had to decide if we want to keep all convolutional layers freezed in training. According to what we’ve learned in class, lower layers of convolution network are recognizing edges and shapes of the image, and only the higher layers of the network are recognizing the overall contents of the image. Because our dataset have several key differences from the imagenet dataset which the pretrained networks were trained to adapt (that our dataset does not have color and the images in the two categories have many similarities), we may require different higher layers. Note that the lower layers of the pretrained network are still useful, because the edge and shape recognition should be the same across different images. Therefore, we now try to gradually unfreeze higher layers of the Inception network and compare the results.
+After choosing the network to continue with, we had to decide if we want to keep all convolutional layers freezed in training. According to what we’ve learned in class, lower layers of convolution network are recognizing edges and shapes of the image, and only the higher layers of the network are recognizing the overall contents of the image. Because our dataset have several key differences from the imagenet dataset which the pretrained networks were trained to classify, we may need to retrain higher layers. Note that the lower layers of the pretrained network are still useful, because the edge and shape recognition should be the same across different images. Therefore, we now try to gradually unfreeze higher layers of the Inception network and compare the results.
 
 ![Inception V3](https://github.com/liangyuRain/chest-xray-pneumonia/blob/master/images/INCEPT_30_1e-05_unfrozen.png)
 
-We have unfreeze the last three layers of the Inception network. Unfortunately, the network overfits quickly during the training without significant improvement in test accuracy.
+We have unfrozen the last three layers of the Inception network. Unfortunately, the network overfits quickly during the training without significant improvement in test accuracy.
 
 ### Data Augmentation
 
-In order to combat the overfitting problem, we decide to do some data augmentation on our dataset. Because our training data and target data are all chest X-ray images, it is impossible for target images to be too different from training images in terms of certain characteristics. For example, the color of the images must be grayscale, and the position of the lungs are roughly the same. Therefore, we need to be careful when choosing data augmentation techniques. Some techniques like random vertical flip and color Jitter are not suitable in our case. We end up with the following transforms:
+In order to combat the overfitting problem, we decided to do some data augmentation on our dataset. Because our training data and target data are all chest X-ray images, it is impossible for target images to be too different from training images in terms of certain characteristics. For example, the color of the images must be grayscale, and the position of the lungs are roughly the same. Therefore, we need to be careful when choosing data augmentation techniques. Some techniques like random vertical flip and color Jitter are not suitable in our case. We end up with the following transforms:
 
 ```python
 transform_train = transforms.Compose([
@@ -73,7 +74,7 @@ transform_train = transforms.Compose([
 
 Since human lungs are generally symmetric, we use horizontal flip in the data augmentation. Besides the horizontal flip, we have also used random affine with relatively small parameters, because we do not want to change the shape and direction of the X-ray images too much.
 
-With data augmentation, we retrained Inception without unfreeze pretrained layers. The result ends up with a slight improvement on test accuracy. Without data augmentation, test accuracy becomes stable around 83%; with data augmentation, test accuracy becomes stable around 85%.
+With data augmentation, we retrained Inception without unfrozen pretrained layers. The result ends up with a slight improvement on test accuracy. Without data augmentation, test accuracy becomes stable around 83%; with data augmentation, test accuracy becomes stable around 85%.
 
 ### Second Attempt to Unfreeze Pretrained Layers
 
