@@ -93,12 +93,12 @@ With data augmentation, our network becomes more robust against overfitting. The
 
 Based on our experiments, our best performance ends up with 9 modules of the Inception V3 network unfrozen. The accuracy is around 91%, significantly higher than our previous performance.
 
-### Future Work: Balance Classes
+## Future Work: Balance Classes
 
 In our dataset, we have two classes: normal and pneumonia. However, the sizes of two classes are imbalanced with pneumonia having 3875 images and normal having only 1341 images. In our exploration, we have only tried simple oversampling the normal data to balance the classes; however, the result is not ideal. The network overfits quickly, which is a clear disadvantage of oversampling technique. 
 
 There are many other more advanced balancing techniques existing, such as anomaly detection algorithms. Here, we do not have enough time to do experiment on them, but in our opinions, balancing classes has a great potential in further improving the performance of our network.
 
-### Conclusion
+## Conclusion
 
 During our exploration for a optimal network to diagnose pneumonia, we have tried numerous approaches to improve our pretrained network. We firstly replaced the original classifier part of pretrained CNNs with our own classifier layers. Then we perform training on different pretrained networks and choose Inception V3 network based on the performance. Finally, we used data augmentation and unfroze higher layers of the CNN to obtain an accuracy over 90% on our test dataset. Because we use pretrained network, the network easily overfit in our training. Our exploration is a continuous combat versus overfitting. If better techniques to prevent overfitting are used, we believe the network has great potential to have better performance.
