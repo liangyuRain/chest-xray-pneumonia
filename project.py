@@ -22,10 +22,13 @@ import torch.utils.data
 
 import matplotlib
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
+
 
 def train(model, device, train_loader, optimizer, epoch, log_interval):
     model.train()
     losses = []
+    correct = 0
     for batch_idx, (data, label) in enumerate(train_loader):
         data, label = data.to(device), label.to(device)
         optimizer.zero_grad()
@@ -35,8 +38,12 @@ def train(model, device, train_loader, optimizer, epoch, log_interval):
         # for handling tuple outputs as in Inception V3 model
         if isinstance(output, tuple):
             loss = sum((model.loss(o, label) for o in output))
+            pred = output[0].max(1, keepdim=True)[1]
         else:
             loss = model.loss(output, label)
+            pred = output.max(1, keepdim=True)[1]
+
+        correct += pred.eq(label.view_as(pred)).sum().item()
 
         losses.append(loss.item())
         loss.backward()
@@ -46,7 +53,9 @@ def train(model, device, train_loader, optimizer, epoch, log_interval):
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.item()))
-    return np.mean(losses)
+    train_accuracy = 100. * correct / len(train_loader.dataset)
+    print('Train Accuracy: {0}%'.format(int(train_accuracy)))
+    return np.mean(losses), train_accuracy
 
 
 def test(model, device, test_loader):
@@ -57,8 +66,15 @@ def test(model, device, test_loader):
         for data, label in test_loader:
             data, label = data.to(device), label.to(device)
             output = model(data)
-            test_loss += model.testLoss(output, label).item()
-            pred = output.max(1, keepdim=True)[1]
+
+            if isinstance(output, tuple):
+                loss = sum((model.testLoss(o, label) for o in output))
+                pred = output[0].max(1, keepdim=True)[1]
+            else:
+                loss = model.testLoss(output, label)
+                pred = output.max(1, keepdim=True)[1]
+
+            test_loss += loss.item()
             correct += pred.eq(label.view_as(pred)).sum().item()
 
     test_loss /= len(test_loader.dataset)
@@ -69,16 +85,17 @@ def test(model, device, test_loader):
         100. * correct / len(test_loader.dataset)))
     return test_loss, test_accuracy
 
-LR = 0.1
-WEIGHT_DECAY = 0.0001
+
+LR = 1e-5
+WEIGHT_DECAY = 0
 MOMENTUM = 0.9
-EPOCHS = 100
+EPOCHS = 5
 BATCH_SIZE = 32
 USE_CUDA = True
 SEED = 0
 LOG_INTERVAL = 20
-LAYERS_TO_TRAIN = 1
-MODEL = 'DENSE'
+LAYERS_TO_TRAIN = 10
+MODEL = 'INCEPT'
 #'VGG' #'ALEX' #'RES' #'DENSE' #'INCEPT'
 NUM_CLASSES = 2
 
@@ -111,16 +128,38 @@ elif MODEL == 'RES':
 # set categories to NUM_CLASSES (2 by default)
 if MODEL == 'INCEPT' or MODEL == 'RES': 
     num_ftrs = model.fc.in_features
-    model.fc = nn.Linear(num_ftrs, NUM_CLASSES, bias=True)
+    # model.fc = nn.Linear(num_ftrs, NUM_CLASSES, bias=True)
+    model.fc = nn.Sequential(
+        nn.Linear(num_ftrs, 1024, bias=True),
+        nn.ReLU(inplace=True),
+        nn.Dropout(p=0.3),
+        nn.Linear(1024, 512, bias=True),
+        nn.ReLU(inplace=True),
+        nn.Dropout(p=0.3),
+        nn.Linear(512, NUM_CLASSES, bias=True)
+    )
 elif MODEL == 'ALEX' or MODEL == 'VGG':
-    num_ftrs = model.classifier[len(model.classifier)-1].in_features
+    num_ftrs = model.classifier[0].in_features
     model.classifier = nn.Sequential(
-        *(model.classifier[i] for i in range(len(model.classifier)-1)),
-        nn.Linear(num_ftrs, NUM_CLASSES, bias=True)
+        nn.Linear(num_ftrs, 1024, bias=True),
+        nn.ReLU(inplace=True),
+        nn.Dropout(p=0.3),
+        nn.Linear(1024, 512, bias=True),
+        nn.ReLU(inplace=True),
+        nn.Dropout(p=0.3),
+        nn.Linear(512, NUM_CLASSES, bias=True)
     )
 elif MODEL == 'DENSE':
     num_ftrs = model.classifier.in_features
-    model.classifier = nn.Linear(num_ftrs, NUM_CLASSES, bias=True)
+    model.classifier = nn.Sequential(
+        nn.Linear(num_ftrs, 1024, bias=True),
+        nn.ReLU(inplace=True),
+        nn.Dropout(p=0.3),
+        nn.Linear(1024, 512, bias=True),
+        nn.ReLU(inplace=True),
+        nn.Dropout(p=0.3),
+        nn.Linear(512, NUM_CLASSES, bias=True)
+    )
 else:
     pass
 
@@ -134,10 +173,11 @@ print(model)
 model = model.to(device)
 
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), 
-                      lr=LR, 
-                      momentum=MOMENTUM, 
-                      weight_decay=WEIGHT_DECAY)
+# optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()),
+#                       lr=LR,
+#                       momentum=MOMENTUM,
+#                       weight_decay=WEIGHT_DECAY)
+optimizer = optim.RMSprop(filter(lambda p: p.requires_grad, model.parameters()), lr=LR, weight_decay=WEIGHT_DECAY)
 
 model.loss = nn.CrossEntropyLoss()
 model.testLoss = nn.CrossEntropyLoss(reduction='sum')
@@ -147,30 +187,21 @@ class ImageLoader(object):
 
     def __init__(self, batchSize):
         super(ImageLoader, self).__init__()
-        if (resize_flag):
-            transform_train = transforms.Compose([
-                transforms.Resize(size=input_size),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-            ])
+        zoom = 1.15
+        transform_train = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.Resize(size=input_size),
+            transforms.RandomAffine(degrees=5, translate=(0.1, 0.1), scale=(1, 1.2), shear=0.1),
+            transforms.RandomCrop(size=input_size),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
 
-            transform_test = transforms.Compose([
-                transforms.Resize(size=input_size),
-                transforms.ToTensor(),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-            ])
-        else:
-            transform_train = transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-            ])
-
-            transform_test = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-            ])
+        transform_test = transforms.Compose([
+            transforms.Resize(size=input_size),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
 
         train_dataset = datasets.ImageFolder(root='chest_xray_dataset/train',
                                              transform=transform_train)
@@ -188,34 +219,48 @@ class ImageLoader(object):
 
         self.classes = ('normal', 'pneumonia')
 
-def plot(data, title, xlab, ylab):
-    x_val = [x[0] for x in data]
-    y_val = [x[1] for x in data]
-    plt.plot(x_val, y_val)
-    plt.title(title)
-    plt.xlabel(xlab)
-    plt.ylabel(ylab)
-    plt.show()
 
 loader = ImageLoader(batchSize=BATCH_SIZE)
 train_losses = []
-test_losses = [] 
+test_losses = []
+train_accuracies = []
 test_accuracies = []
 
-try:
-    for epoch in range(EPOCHS + 1):
-        train_loss = train(model, device, loader.trainloader, optimizer, epoch, LOG_INTERVAL)
-        test_loss, test_accuracy = test(model, device, loader.testloader)
-        train_losses.append((epoch, train_loss))
-        test_losses.append((epoch, test_loss))
-        test_accuracies.append((epoch, test_accuracy))
-except KeyboardInterrupt as ke:
-    print('Interrupted')
-except:
-    import traceback
-    traceback.print_exc()
-finally:
-    plot(train_losses, 'Train Losses', 'Epochs', 'Loss')
-    plot(test_losses, 'Test Losses', 'Epochs', 'Loss')
-    plot(test_accuracies, 'Test Accuracies', 'Epochs', 'Accuracy')
+
+if __name__ == '__main__':
+    try:
+        for epoch in range(1, EPOCHS + 1):
+            train_loss, train_accuracy = train(model, device, loader.trainloader, optimizer, epoch, LOG_INTERVAL)
+            test_loss, test_accuracy = test(model, device, loader.testloader)
+            train_losses.append((epoch, train_loss))
+            test_losses.append((epoch, test_loss))
+            train_accuracies.append((epoch, train_accuracy))
+            test_accuracies.append((epoch, test_accuracy))
+    except KeyboardInterrupt as ke:
+        print('Interrupted')
+    except:
+        import traceback
+        traceback.print_exc()
+    finally:
+        xs = [p[0] for p in train_losses]
+        fig, ax1 = plt.subplots()
+        ax2 = ax1.twinx()
+        ax1.plot(xs, [p[1] for p in train_accuracies], 'g-^', label='Train Accu')
+        ax1.plot(xs, [p[1] for p in test_accuracies], 'g-o', label='Test Accu')
+        ax2.plot(xs, [p[1] for p in train_losses], 'b-^', label='Train Loss')
+        ax2.plot(xs, [p[1] for p in test_losses], 'b-o', label='Test Loss')
+
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Accuracy', color='g')
+        ax2.set_ylabel('Loss', color='b')
+
+        plt.legend(handles=[mlines.Line2D([], [], color='black', marker='^', label='Train'),
+                            mlines.Line2D([], [], color='black', marker='o', label='Test')])
+
+        plt.savefig('{0}_{1}_{2}_result'.format(MODEL, EPOCHS, LR))
+        with open('{0}_{1}_{2}_result'.format(MODEL, EPOCHS, LR) + '_data.dat', 'w') as f:
+            f.write(str(train_accuracies) + '\n')
+            f.write(str(test_accuracies) + '\n')
+            f.write(str(train_losses) + '\n')
+            f.write(str(test_losses) + '\n')
 
